@@ -38,6 +38,9 @@ public class WaterWallpaperService extends WallpaperService {
   private final float[] bx=new float[48],by=new float[48],br=new float[48],bs=new float[48],bp=new float[48];
   private final boolean[] active=new boolean[48];
   private float downX=0f,downY=1f,smoothX=0f,smoothY=1f,slosh=0f,sloshSpeed=0f;
+  private final float[] waveA=new float[4],waveV=new float[4];
+  private long sensorNs=0;
+  private final float[] depth=new float[48],drift=new float[48];
   private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
    @Override public void onReceive(Context context, Intent intent) {
     int value = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
@@ -59,15 +62,21 @@ public class WaterWallpaperService extends WallpaperService {
     if(n>.001f){smoothX/=n;smoothY/=n;}
     sloshSpeed+=(-slosh*19f-sloshSpeed*6f)*dt;
     slosh+=sloshSpeed*dt;
+    for(int k=0;k<waveA.length;k++){
+      float omega=4.2f+k*2.4f;
+      waveV[k]+=(-omega*omega*waveA[k]-(1.4f+k*.32f)*waveV[k])*dt;
+      waveA[k]+=waveV[k]*dt;
+    }
     for(int i=0;i<active.length;i++){
       if(!active[i]){
         if(random.nextFloat()<dt*(charging?1.5f:.8f)){
           active[i]=true;bx[i]=random.nextFloat();by[i]=1.05f+random.nextFloat()*.2f;
           br[i]=.002f+(float)Math.pow(random.nextFloat(),2)*.016f;
           bs[i]=.05f+random.nextFloat()*.18f;bp[i]=random.nextFloat()*6.28f;
+          depth[i]=random.nextFloat();drift[i]=(random.nextFloat()-.5f)*.07f;
         }
       }else{
-        by[i]-=bs[i]*dt;bp[i]+=dt*(1f+br[i]*80f);
+        by[i]-=bs[i]*dt;bx[i]+=drift[i]*dt;bp[i]+=dt*(1f+br[i]*80f);
         if(by[i]<-.2f)active[i]=false;
       }
     }
@@ -115,7 +124,14 @@ public class WaterWallpaperService extends WallpaperService {
      // Android sensor Y points up the device, canvas Y points down.
      float nx=-gx/magnitude,ny=gy/magnitude;
      float change=(float)Math.hypot(nx-downX,ny-downY);
-     if(change>.025f)sloshSpeed+=Math.min(1.5f,change)*.25f;
+     float seconds=sensorNs==0?.02f:Math.max(.008f,Math.min(.1f,(event.timestamp-sensorNs)*1e-9f));
+     sensorNs=event.timestamp;
+     float angularSpeed=change/seconds;
+     if(angularSpeed>.08f){
+       float kick=Math.min(2.4f,angularSpeed)*.85f;
+       sloshSpeed+=kick*.3f;
+       for(int k=0;k<waveV.length;k++)waveV[k]+=(k%2==0?1f:-1f)*kick*(.45f+k*.12f);
+     }
      downX=nx;downY=ny;
    }
   }
@@ -149,8 +165,12 @@ public class WaterWallpaperService extends WallpaperService {
     if(filled){p.moveTo(nx*t-tx*span+nx*span,ny*t-ty*span+ny*span);p.lineTo(nx*t-tx*span,ny*t-ty*span);}
     for(int i=0;i<=160;i++){
       float q=-span+2*span*i/160f;
-      float ripple=(float)Math.sin(q/Math.max(1,w)*11f+phase)*Math.min(w,h)*.003f;
-      ripple+=slosh*(float)Math.sin(q/Math.max(1,w)*3f)*Math.min(w,h)*.03f;
+      float u=q/Math.max(1,w);
+      float ripple=(float)Math.sin(u*10f+phase)*Math.min(w,h)*.0018f;
+      ripple+=slosh*(float)Math.sin(u*3f)*Math.min(w,h)*.03f;
+      for(int k=0;k<waveA.length;k++){
+        ripple+=waveA[k]*(float)Math.sin(u*(3.1f+k*2.5f)+k*.91f)*Math.min(w,h)*.043f/(1f+k*.2f);
+      }
       float x=nx*(t+ripple)+tx*q,y=ny*(t+ripple)+ty*q;
       if(i==0&&!filled)p.moveTo(x,y);else p.lineTo(x,y);
     }
@@ -190,11 +210,25 @@ public class WaterWallpaperService extends WallpaperService {
     }
     paint.setStyle(Paint.Style.FILL);
     for(int i=0;i<active.length;i++)if(active[i]){
-      float x=(bx[i]+.018f*(float)Math.sin(bp[i]))*w,y=by[i]*h,r=br[i]*w;
-      paint.setColor(0x99b8f5ea);paint.setStyle(Paint.Style.STROKE);
-      paint.setStrokeWidth(Math.max(.7f,r*.17f));canvas.drawCircle(x,y,r,paint);
-      paint.setStyle(Paint.Style.FILL);paint.setColor(0x66ffffff);
-      canvas.drawCircle(x-r*.2f,y-r*.2f,Math.max(.6f,r*.15f),paint);
+      float z=depth[i];
+      float x=(bx[i]+.018f*(float)Math.sin(bp[i]))*w,y=by[i]*h;
+      float radius=br[i]*w*(.55f+z*.9f);
+      // Dark core, refracted teal rim and a warm specular glint create depth.
+      paint.setStyle(Paint.Style.FILL);
+      paint.setShader(new RadialGradient(x-radius*.25f,y-radius*.3f,Math.max(1f,radius*1.35f),
+        new int[]{0x66ffffff,0x223ac8c5,0x99071b3a,0x006fe9d2},
+        new float[]{0f,.32f,.72f,1f},Shader.TileMode.CLAMP));
+      canvas.drawCircle(x,y,radius*1.35f,paint);paint.setShader(null);
+      paint.setStyle(Paint.Style.STROKE);
+      paint.setStrokeWidth(Math.max(.6f,radius*(.07f+.06f*z)));
+      paint.setColor(z>.5f?0xaac5f5e7:0x5570b6c8);
+      canvas.drawCircle(x,y,radius,paint);
+      paint.setStrokeWidth(Math.max(.7f,radius*.15f));
+      paint.setColor(z>.5f?0xbbffe4b3:0x6687f1e9);
+      canvas.drawArc(x-radius*.83f,y-radius*.83f,x+radius*.83f,y+radius*.83f,205f,83f,false,paint);
+      paint.setStyle(Paint.Style.FILL);
+      paint.setColor(z>.5f?0xaafff7df:0x77bce4f6);
+      canvas.drawCircle(x-radius*.29f,y-radius*.34f,Math.max(.6f,radius*.13f),paint);
     }
     canvas.restore();
     Path waterline=surface(nx,ny,t,w,h,false);
