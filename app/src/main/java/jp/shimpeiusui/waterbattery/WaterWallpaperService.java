@@ -10,6 +10,7 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RadialGradient;
 import android.graphics.Shader;
+import java.util.Random;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -33,11 +34,18 @@ public class WaterWallpaperService extends WallpaperService {
   private float battery = .65f, tilt = 0f, targetTilt = 0f, phase = 0f, gx = 0f, gy = 9.8f;
   private boolean charging = false;
   private long lastNs;
+  private final Random random=new Random();
+  private final float[] bx=new float[48],by=new float[48],br=new float[48],bs=new float[48],bp=new float[48];
+  private final boolean[] active=new boolean[48];
+  private float downX=0f,downY=1f,smoothX=0f,smoothY=1f,slosh=0f,sloshSpeed=0f;
+  private boolean charging=false;
   private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
    @Override public void onReceive(Context context, Intent intent) {
     int value = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
     int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
     if (value >= 0 && scale > 0) battery = Math.max(0f, Math.min(1f, value / (float)scale));
+    int status=intent.getIntExtra(BatteryManager.EXTRA_STATUS,0);
+    charging=status==BatteryManager.BATTERY_STATUS_CHARGING || status==BatteryManager.BATTERY_STATUS_FULL;
     int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, 0);
     charging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL;
    }
@@ -48,7 +56,24 @@ public class WaterWallpaperService extends WallpaperService {
     long now = System.nanoTime();
     float dt = lastNs == 0 ? .033f : Math.min(.05f, (now-lastNs)/1000000000f);
     lastNs = now;
-    tilt += (targetTilt - tilt) * Math.min(1f, dt * 5f);
+    float alpha=Math.min(1f,dt*7f);
+    smoothX+=(downX-smoothX)*alpha; smoothY+=(downY-smoothY)*alpha;
+    float n=(float)Math.hypot(smoothX,smoothY);
+    if(n>.001f){smoothX/=n;smoothY/=n;}
+    sloshSpeed+=(-slosh*19f-sloshSpeed*6f)*dt;
+    slosh+=sloshSpeed*dt;
+    for(int i=0;i<active.length;i++){
+      if(!active[i]){
+        if(random.nextFloat()<dt*(charging?1.5f:.8f)){
+          active[i]=true;bx[i]=random.nextFloat();by[i]=1.05f+random.nextFloat()*.2f;
+          br[i]=.002f+(float)Math.pow(random.nextFloat(),2)*.016f;
+          bs[i]=.05f+random.nextFloat()*.18f;bp[i]=random.nextFloat()*6.28f;
+        }
+      }else{
+        by[i]-=bs[i]*dt;bp[i]+=dt*(1f+br[i]*80f);
+        if(by[i]<-.2f)active[i]=false;
+      }
+    }
     phase += dt * 1.5f;
     drawFrame();
     handler.postDelayed(this, 33);
@@ -88,12 +113,52 @@ public class WaterWallpaperService extends WallpaperService {
    if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
     gx = gx*.88f + x*.12f; gy = gy*.88f + y*.12f;
    } else { gx = x; gy = y; }
-   float magnitude = (float)Math.hypot(gx, gy);
-   if (magnitude > 1.3f) targetTilt = Math.max(-.7f, Math.min(.7f, gx/Math.max(2.5f, Math.abs(gy))));
+   float magnitude=(float)Math.hypot(gx,gy);
+   if(magnitude>1.3f){
+     // Android sensor Y points up the device, canvas Y points down.
+     float nx=-gx/magnitude,ny=gy/magnitude;
+     float change=(float)Math.hypot(nx-downX,ny-downY);
+     if(change>.025f)sloshSpeed+=Math.min(1.5f,change)*.25f;
+     downX=nx;downY=ny;
+   }
   }
   @Override public void onAccuracyChanged(Sensor sensor, int accuracy) {}
-  private float wave(float x, float w, float base) {
-   return base + tilt*(x-w*.5f) + Math.min(8f, w*.012f)*(float)Math.sin(x/Math.max(1f,w)*9f+phase);
+  private float area(float nx,float ny,float t,float w,float h){
+    float[] x={0,w,w,0},y={0,0,h,h},px=new float[8],py=new float[8];
+    int count=0;
+    for(int i=0;i<4;i++){
+      int j=(i+1)%4;float a=nx*x[i]+ny*y[i]-t,c=nx*x[j]+ny*y[j]-t;
+      if(a>=0){px[count]=x[i];py[count++]=y[i];}
+      if((a<0&&c>0)||(a>0&&c<0)){
+        float f=a/(a-c);px[count]=x[i]+f*(x[j]-x[i]);py[count++]=y[i]+f*(y[j]-y[i]);
+      }
+    }
+    float sum=0;
+    for(int i=0;i<count;i++){int j=(i+1)%count;sum+=px[i]*py[j]-px[j]*py[i];}
+    return Math.abs(sum)*.5f;
+  }
+  private float threshold(float nx,float ny,float w,float h){
+    float lo=Math.min(0,nx*w)+Math.min(0,ny*h)-1;
+    float hi=Math.max(0,nx*w)+Math.max(0,ny*h)+1;
+    float fraction=.025f+.80f*battery;
+    for(int i=0;i<23;i++){
+      float mid=(lo+hi)*.5f;
+      if(area(nx,ny,mid,w,h)>w*h*fraction)lo=mid;else hi=mid;
+    }
+    return (lo+hi)*.5f;
+  }
+  private Path surface(float nx,float ny,float t,float w,float h,boolean filled){
+    Path p=new Path();float tx=-ny,ty=nx,span=(float)Math.hypot(w,h)*1.5f;
+    if(filled){p.moveTo(nx*t-tx*span+nx*span,ny*t-ty*span+ny*span);p.lineTo(nx*t-tx*span,ny*t-ty*span);}
+    for(int i=0;i<=160;i++){
+      float q=-span+2*span*i/160f;
+      float ripple=(float)Math.sin(q/Math.max(1,w)*11f+phase)*Math.min(w,h)*.003f;
+      ripple+=slosh*(float)Math.sin(q/Math.max(1,w)*3f)*Math.min(w,h)*.03f;
+      float x=nx*(t+ripple)+tx*q,y=ny*(t+ripple)+ty*q;
+      if(i==0&&!filled)p.moveTo(x,y);else p.lineTo(x,y);
+    }
+    if(filled){p.lineTo(nx*t+tx*span+nx*span,ny*t+ty*span+ny*span);p.close();}
+    return p;
   }
   private void drawFrame() {
    SurfaceHolder holder = getSurfaceHolder(); Canvas canvas = null;
@@ -105,45 +170,41 @@ public class WaterWallpaperService extends WallpaperService {
     canvas.drawRect(0,0,w,h,paint);
     paint.setShader(new RadialGradient(w*.75f,h*.23f,w*.9f,new int[]{0x3357b8db,0x002a7599},null,Shader.TileMode.CLAMP));
     canvas.drawRect(0,0,w,h,paint); paint.setShader(null);
-    // Keep the surface visible even when the battery is full.
-    float left=w*.055f, right=w*.945f, top=h*.06f, bottom=h*.96f;
-    float surface = bottom - (bottom-top)*(.035f + .81f*battery);
-    path.reset(); path.addRoundRect(left,top,right,bottom,w*.065f,w*.065f,Path.Direction.CW);
-    canvas.save(); canvas.clipPath(path);
-    path.reset(); path.moveTo(0,h); path.lineTo(0,wave(0,w,surface));
-    for(int i=1;i<=120;i++){ float x=w*i/120f; path.lineTo(x,wave(x,w,surface)); }
-    path.lineTo(w,h); path.close();
-    int[] colors = battery<=.20f ? new int[]{0xffe6b178,0xffa56d59,0xff372642}
-                                    : new int[]{0xff72d9c4,0xff16878d,0xff11294f};
-    paint.setShader(new LinearGradient(0,surface,w,bottom,colors,null,Shader.TileMode.CLAMP));
-    canvas.drawPath(path,paint); paint.setShader(null);
-    paint.setShader(new RadialGradient(w*.8f,surface+h*.12f,w*.85f,
-        new int[]{0x8895f8d6,0x2248c7b7,0x00203857},null,Shader.TileMode.CLAMP));
-    canvas.drawPath(path,paint); paint.setShader(null);
-    paint.setShader(new LinearGradient(0,surface,0,bottom,
-        new int[]{0x33f4e4b7,0x00123d54,0x66100c32},null,Shader.TileMode.CLAMP));
-    canvas.drawPath(path,paint); paint.setShader(null);
-    path.reset();
-    for(int i=0;i<=120;i++){float x=w*i/120f; if(i==0)path.moveTo(x,wave(x,w,surface));else path.lineTo(x,wave(x,w,surface));}
-    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(w*.006f);
-    paint.setColor(0x99e4f9e4); canvas.drawPath(path,paint);
-    paint.setStyle(Paint.Style.FILL);
-    for(int i=0;i<30;i++){
-      float bx=left+(right-left)*((i*73%101)/101f);
-      float progress=((i*47%103)/103f + phase*(charging?.08f:.012f))%1f;
-      float by=bottom-(bottom-top)*progress;
-      if(by>wave(bx,w,surface)+6f){
-        paint.setColor(charging?0x99e5f8d8:0x447ac6cf);
-        canvas.drawCircle(bx,by,w*(.002f+.003f*(i%4)/4f),paint);
-      }
+    float nx=smoothX,ny=smoothY,t=threshold(nx,ny,w,h);
+    Path liquid=surface(nx,ny,t,w,h,true);
+    canvas.save();canvas.clipPath(liquid);
+    paint.setShader(new LinearGradient(0,0,w,h,
+      new int[]{0xff041020,0xff063a4d,0xff007b77,0xff182d63,0xff050b19},
+      new float[]{0f,.24f,.49f,.76f,1f},Shader.TileMode.CLAMP));
+    canvas.drawRect(0,0,w,h,paint);paint.setShader(null);
+    paint.setShader(new RadialGradient(w*.86f,h*.26f,w*.9f,
+      new int[]{0xaa00d4b7,0x665e93ba,0x002a3568},null,Shader.TileMode.CLAMP));
+    canvas.drawRect(0,0,w,h,paint);paint.setShader(null);
+    for(int i=0;i<5;i++){
+      Path ribbon=new Path();float off=i*.11f;
+      ribbon.moveTo(-w*.35f,h*(.84f+off));
+      ribbon.cubicTo(w*.22f,h*(.54f+off),w*.72f,h*(.95f-off),w*1.25f,h*(.12f+off));
+      paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(w*(.07f+i*.009f));
+      paint.setShader(new LinearGradient(0,h*.8f,w,h*.2f,
+        new int[]{0x0066dfca,0x7750d8d0,0x88586bb0,0x00edb16d},null,Shader.TileMode.CLAMP));
+      canvas.drawPath(ribbon,paint);paint.setShader(null);
+      paint.setStrokeWidth(w*.005f);paint.setColor(i%2==0?0xccf8bf79:0x99b5f8e9);
+      canvas.drawPath(ribbon,paint);
     }
-    paint.setShader(new LinearGradient(left,0,right,0,
-        new int[]{0x449cdacb,0x00162e3b,0x1049c6ae,0x66e7c89c},null,Shader.TileMode.CLAMP));
-    canvas.drawRect(left,top,right,bottom,paint); paint.setShader(null);
+    paint.setStyle(Paint.Style.FILL);
+    for(int i=0;i<active.length;i++)if(active[i]){
+      float x=(bx[i]+.018f*(float)Math.sin(bp[i]))*w,y=by[i]*h,r=br[i]*w;
+      paint.setColor(0x99b8f5ea);paint.setStyle(Paint.Style.STROKE);
+      paint.setStrokeWidth(Math.max(.7f,r*.17f));canvas.drawCircle(x,y,r,paint);
+      paint.setStyle(Paint.Style.FILL);paint.setColor(0x66ffffff);
+      canvas.drawCircle(x-r*.2f,y-r*.2f,Math.max(.6f,r*.15f),paint);
+    }
     canvas.restore();
-    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(w*.003f);
-    paint.setColor(0x88b4d9d0);
-    canvas.drawRoundRect(left,top,right,bottom,w*.065f,w*.065f,paint);
+    Path waterline=surface(nx,ny,t,w,h,false);
+    paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(w*.013f);
+    paint.setColor(0x77edb478);canvas.drawPath(waterline,paint);
+    paint.setStrokeWidth(w*.004f);paint.setColor(0xffb8f5e8);
+    canvas.drawPath(waterline,paint);paint.setStyle(Paint.Style.FILL);
     paint.setStyle(Paint.Style.FILL); paint.setTextAlign(Paint.Align.CENTER);
     paint.setTypeface(android.graphics.Typeface.create("sans-serif-light",0));
     paint.setColor(0xfff5eadb); paint.setTextSize(Math.min(w*.14f,70f));
