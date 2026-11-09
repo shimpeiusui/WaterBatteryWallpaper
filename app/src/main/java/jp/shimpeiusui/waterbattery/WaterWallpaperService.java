@@ -38,14 +38,11 @@ public class WaterWallpaperService extends WallpaperService {
   private final float[] bx=new float[48],by=new float[48],br=new float[48],bs=new float[48],bp=new float[48];
   private final boolean[] active=new boolean[48];
   private float downX=0f,downY=1f,smoothX=0f,smoothY=1f,slosh=0f,sloshSpeed=0f;
-  private boolean charging=false;
   private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
    @Override public void onReceive(Context context, Intent intent) {
     int value = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
     int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
     if (value >= 0 && scale > 0) battery = Math.max(0f, Math.min(1f, value / (float)scale));
-    int status=intent.getIntExtra(BatteryManager.EXTRA_STATUS,0);
-    charging=status==BatteryManager.BATTERY_STATUS_CHARGING || status==BatteryManager.BATTERY_STATUS_FULL;
     int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, 0);
     charging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL;
    }
