@@ -5,6 +5,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Canvas;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -27,6 +31,7 @@ public class WaterWallpaperService extends WallpaperService {
   private final Handler handler = new Handler(Looper.getMainLooper());
   private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
   private final Path path = new Path();
+  private Bitmap liquidArtwork;
   private SensorManager sensors;
   private Sensor sensor;
   private boolean visible;
@@ -42,6 +47,11 @@ public class WaterWallpaperService extends WallpaperService {
   private long sensorNs=0;
   private float filteredSpeed=0f, previousAngular=0f;
   private final float[] depth=new float[48],drift=new float[48];
+  private void ensureArtwork() {
+    if(liquidArtwork==null) {
+      liquidArtwork=BitmapFactory.decodeResource(getResources(),R.drawable.liquid_art);
+    }
+  }
   private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
    @Override public void onReceive(Context context, Intent intent) {
     int value = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
@@ -203,9 +213,17 @@ public class WaterWallpaperService extends WallpaperService {
     float nx=smoothX,ny=smoothY,t=threshold(nx,ny,w,h);
     Path liquid=surface(nx,ny,t,w,h,true);
     canvas.save();canvas.clipPath(liquid);
+    ensureArtwork();
+    if(liquidArtwork!=null){
+      paint.setShader(null);paint.setAlpha(255);
+      canvas.drawBitmap(liquidArtwork,
+        new Rect(0,0,liquidArtwork.getWidth(),liquidArtwork.getHeight()),
+        new RectF(0,0,w,h),paint);
+    }
+    // Translucent depth tint keeps the photographic texture visible.
     paint.setShader(new LinearGradient(0,0,w,h,
-      new int[]{0xff041020,0xff063a4d,0xff007b77,0xff182d63,0xff050b19},
-      new float[]{0f,.24f,.49f,.76f,1f},Shader.TileMode.CLAMP));
+      new int[]{0x44020b19,0x18003d45,0x18006c73,0x4403102b},
+      null,Shader.TileMode.CLAMP));
     canvas.drawRect(0,0,w,h,paint);paint.setShader(null);
     paint.setShader(new RadialGradient(w*.86f,h*.26f,w*.9f,
       new int[]{0xaa00d4b7,0x665e93ba,0x002a3568},null,Shader.TileMode.CLAMP));
