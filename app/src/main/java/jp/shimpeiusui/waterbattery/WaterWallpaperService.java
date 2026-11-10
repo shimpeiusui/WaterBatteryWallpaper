@@ -40,6 +40,7 @@ public class WaterWallpaperService extends WallpaperService {
   private float downX=0f,downY=1f,smoothX=0f,smoothY=1f,slosh=0f,sloshSpeed=0f;
   private final float[] waveA=new float[4],waveV=new float[4];
   private long sensorNs=0;
+  private float filteredSpeed=0f, previousAngular=0f;
   private final float[] depth=new float[48],drift=new float[48];
   private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
    @Override public void onReceive(Context context, Intent intent) {
@@ -56,15 +57,16 @@ public class WaterWallpaperService extends WallpaperService {
     long now = System.nanoTime();
     float dt = lastNs == 0 ? .033f : Math.min(.05f, (now-lastNs)/1000000000f);
     lastNs = now;
-    float alpha=Math.min(1f,dt*7f);
+    float alpha=Math.min(1f,dt*5f);
+    filteredSpeed*=Math.exp(-dt*4.0f);
     smoothX+=(downX-smoothX)*alpha; smoothY+=(downY-smoothY)*alpha;
     float n=(float)Math.hypot(smoothX,smoothY);
     if(n>.001f){smoothX/=n;smoothY/=n;}
     sloshSpeed+=(-slosh*19f-sloshSpeed*6f)*dt;
     slosh+=sloshSpeed*dt;
     for(int k=0;k<waveA.length;k++){
-      float omega=4.2f+k*2.4f;
-      waveV[k]+=(-omega*omega*waveA[k]-(1.4f+k*.32f)*waveV[k])*dt;
+      float omega=6.8f+k*2.8f;
+      waveV[k]+=(-omega*omega*waveA[k]-(5.8f+k*.65f)*waveV[k])*dt;
       waveA[k]+=waveV[k]*dt;
     }
     for(int i=0;i<active.length;i++){
@@ -127,10 +129,16 @@ public class WaterWallpaperService extends WallpaperService {
      float seconds=sensorNs==0?.02f:Math.max(.008f,Math.min(.1f,(event.timestamp-sensorNs)*1e-9f));
      sensorNs=event.timestamp;
      float angularSpeed=change/seconds;
-     if(angularSpeed>.08f){
-       float kick=Math.min(2.4f,angularSpeed)*.85f;
-       sloshSpeed+=kick*.3f;
-       for(int k=0;k<waveV.length;k++)waveV[k]+=(k%2==0?1f:-1f)*kick*(.45f+k*.12f);
+     // Only changes in motion should excite the liquid; do not inject
+     // energy continuously while rotating at a steady speed.
+     float acceleration=Math.abs(angularSpeed-previousAngular);
+     previousAngular=angularSpeed;
+     filteredSpeed=filteredSpeed*.78f+angularSpeed*.22f;
+     if(acceleration>.45f && angularSpeed>.12f){
+       float kick=Math.min(1.0f,acceleration*.10f);
+       sloshSpeed=Math.max(-.4f,Math.min(.4f,sloshSpeed+kick*.055f));
+       for(int k=0;k<waveV.length;k++)
+         waveV[k]=Math.max(-.65f,Math.min(.65f,waveV[k]+(k%2==0?1f:-1f)*kick*.12f/(k+1)));
      }
      downX=nx;downY=ny;
    }
@@ -167,10 +175,11 @@ public class WaterWallpaperService extends WallpaperService {
       float q=-span+2*span*i/160f;
       float u=q/Math.max(1,w);
       float ripple=(float)Math.sin(u*10f+phase)*Math.min(w,h)*.0018f;
-      ripple+=slosh*(float)Math.sin(u*3f)*Math.min(w,h)*.03f;
+      ripple+=Math.max(-.25f,Math.min(.25f,slosh))*(float)Math.sin(u*3f)*Math.min(w,h)*.012f;
       for(int k=0;k<waveA.length;k++){
-        ripple+=waveA[k]*(float)Math.sin(u*(3.1f+k*2.5f)+k*.91f)*Math.min(w,h)*.043f/(1f+k*.2f);
+        ripple+=Math.max(-.22f,Math.min(.22f,waveA[k]))*(float)Math.sin(u*(3.1f+k*2.5f)+k*.91f)*Math.min(w,h)*.018f/(1f+k*.3f);
       }
+      ripple=Math.max(-Math.min(w,h)*.015f,Math.min(Math.min(w,h)*.015f,ripple));
       float x=nx*(t+ripple)+tx*q,y=ny*(t+ripple)+ty*q;
       if(i==0&&!filled)p.moveTo(x,y);else p.lineTo(x,y);
     }
@@ -197,17 +206,26 @@ public class WaterWallpaperService extends WallpaperService {
     paint.setShader(new RadialGradient(w*.86f,h*.26f,w*.9f,
       new int[]{0xaa00d4b7,0x665e93ba,0x002a3568},null,Shader.TileMode.CLAMP));
     canvas.drawRect(0,0,w,h,paint);paint.setShader(null);
-    for(int i=0;i<5;i++){
-      Path ribbon=new Path();float off=i*.11f;
-      ribbon.moveTo(-w*.35f,h*(.84f+off));
-      ribbon.cubicTo(w*.22f,h*(.54f+off),w*.72f,h*(.95f-off),w*1.25f,h*(.12f+off));
-      paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(w*(.07f+i*.009f));
-      paint.setShader(new LinearGradient(0,h*.8f,w,h*.2f,
-        new int[]{0x0066dfca,0x7750d8d0,0x88586bb0,0x00edb16d},null,Shader.TileMode.CLAMP));
+    // Smooth glass caustics instead of straight graphic ribbons.
+    for(int i=0;i<7;i++){
+      float shift=i*.075f;
+      Path ribbon=new Path();
+      ribbon.moveTo(-w*.38f,h*(.84f+shift));
+      ribbon.cubicTo(w*.15f,h*(.69f+shift),w*.52f,h*(1.07f-shift),w*.79f,h*(.65f-shift));
+      ribbon.cubicTo(w*1.02f,h*(.36f-shift),w*.91f,h*(.19f+shift),w*1.25f,h*(.08f+shift));
+      paint.setStyle(Paint.Style.STROKE);
+      paint.setStrokeWidth(w*(.028f+i*.013f));
+      paint.setShader(new LinearGradient(0,h*.86f,w,h*.14f,
+        new int[]{0x002dd8bf,0x4465c6ce,0x554d66ab,0x00edb16d},null,Shader.TileMode.CLAMP));
       canvas.drawPath(ribbon,paint);paint.setShader(null);
-      paint.setStrokeWidth(w*.005f);paint.setColor(i%2==0?0xccf8bf79:0x99b5f8e9);
+      paint.setStrokeWidth(w*(.0015f+i*.0003f));
+      paint.setColor(i%3==0?0x99ffd69c:0x5577e6db);
       canvas.drawPath(ribbon,paint);
     }
+    paint.setStyle(Paint.Style.FILL);
+    paint.setShader(new RadialGradient(w*.12f,h*.66f,w*.75f,
+      new int[]{0x7740b4ad,0x22425c9a,0x00051025},null,Shader.TileMode.CLAMP));
+    canvas.drawRect(0,0,w,h,paint);paint.setShader(null);
     paint.setStyle(Paint.Style.FILL);
     for(int i=0;i<active.length;i++)if(active[i]){
       float z=depth[i];
