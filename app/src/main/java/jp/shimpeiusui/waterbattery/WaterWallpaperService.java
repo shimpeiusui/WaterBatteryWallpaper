@@ -39,6 +39,7 @@ public class WaterWallpaperService extends WallpaperService {
   private float battery = .65f, tilt = 0f, targetTilt = 0f, phase = 0f, gx = 0f, gy = 9.8f;
   private boolean charging = false;
   private long lastNs;
+  private float ambientTime=0f;
   private final Random random=new Random();
   private final float[] bx=new float[48],by=new float[48],br=new float[48],bs=new float[48],bp=new float[48];
   private final boolean[] active=new boolean[48];
@@ -93,6 +94,7 @@ public class WaterWallpaperService extends WallpaperService {
       }
     }
     phase += dt * 1.5f;
+    ambientTime += dt;
     drawFrame();
     handler.postDelayed(this, 33);
    }
@@ -205,20 +207,40 @@ public class WaterWallpaperService extends WallpaperService {
    try {
     canvas = holder.lockCanvas(); if (canvas == null) return;
     float w = canvas.getWidth(), h = canvas.getHeight();
-    paint.setStyle(Paint.Style.FILL);
-    paint.setShader(new LinearGradient(0,0,w,h,new int[]{0xff111b39,0xff071426,0xff040a1c},null,Shader.TileMode.CLAMP));
-    canvas.drawRect(0,0,w,h,paint);
-    paint.setShader(new RadialGradient(w*.75f,h*.23f,w*.9f,new int[]{0x3357b8db,0x002a7599},null,Shader.TileMode.CLAMP));
-    canvas.drawRect(0,0,w,h,paint); paint.setShader(null);
+    // Background is always present, independent of the liquid fill.
+    ensureArtwork();
+    canvas.drawColor(0xff041324);
+    if(liquidArtwork!=null){
+      float dx=(float)Math.sin(ambientTime*.095f)*w*.018f;
+      float dy=(float)Math.cos(ambientTime*.071f)*h*.012f;
+      paint.setStyle(Paint.Style.FILL);paint.setShader(null);paint.setAlpha(255);
+      paint.setFilterBitmap(true);
+      canvas.drawBitmap(liquidArtwork,
+        new Rect(0,0,liquidArtwork.getWidth(),liquidArtwork.getHeight()),
+        new RectF(-w*.055f+dx,-h*.055f+dy,w*1.055f+dx,h*1.055f+dy),paint);
+    }
+    // Slow, subtle ambient light undulates independently from the water.
+    float glowX=w*(.55f+.22f*(float)Math.sin(ambientTime*.14f));
+    float glowY=h*(.38f+.12f*(float)Math.cos(ambientTime*.11f));
+    paint.setShader(new RadialGradient(glowX,glowY,w*.95f,
+      new int[]{0x3349a8b5,0x17228f9c,0x00051229},null,Shader.TileMode.CLAMP));
+    canvas.drawRect(0,0,w,h,paint);paint.setShader(null);
+    // Dark vignette keeps icons legible while retaining clear detail.
+    paint.setShader(new LinearGradient(0,0,0,h,
+      new int[]{0x44020b20,0x0004142a,0x22010a20},null,Shader.TileMode.CLAMP));
+    canvas.drawRect(0,0,w,h,paint);paint.setShader(null);
     float nx=smoothX,ny=smoothY,t=threshold(nx,ny,w,h);
     Path liquid=surface(nx,ny,t,w,h,true);
     canvas.save();canvas.clipPath(liquid);
-    ensureArtwork();
+    // Subtle underwater softening: translucent refractive layers over
+    // the same gently moving background, without an expensive full blur.
+    float refractionX=(float)Math.sin(ambientTime*.17f)*w*.008f;
     if(liquidArtwork!=null){
-      paint.setShader(null);paint.setAlpha(255);
+      paint.setShader(null);paint.setAlpha(42);
       canvas.drawBitmap(liquidArtwork,
         new Rect(0,0,liquidArtwork.getWidth(),liquidArtwork.getHeight()),
-        new RectF(0,0,w,h),paint);
+        new RectF(-w*.025f+refractionX,-h*.014f,w*1.025f+refractionX,h*1.014f),paint);
+      paint.setAlpha(255);
     }
     // Translucent depth tint keeps the photographic texture visible.
     paint.setShader(new LinearGradient(0,0,w,h,
@@ -303,12 +325,6 @@ public class WaterWallpaperService extends WallpaperService {
     paint.setColor(0x77edb478);canvas.drawPath(waterline,paint);
     paint.setStrokeWidth(w*.0035f);paint.setColor(0xffd8fff2);
     canvas.drawPath(waterline,paint);paint.setStyle(Paint.Style.FILL);
-    paint.setStyle(Paint.Style.FILL); paint.setTextAlign(Paint.Align.CENTER);
-    paint.setTypeface(android.graphics.Typeface.create("sans-serif-light",0));
-    paint.setColor(0xfff5eadb); paint.setTextSize(Math.min(w*.14f,70f));
-    canvas.drawText(Math.round(battery*100f)+"%",w*.5f,h*.22f,paint);
-    paint.setTextSize(Math.min(w*.027f,15f)); paint.setColor(0xffa4b8c9);
-    canvas.drawText("L I Q U I D   /   E N E R G Y",w*.5f,h*.22f+34f,paint);
    } catch (Exception ignored) { } finally { if(canvas!=null)holder.unlockCanvasAndPost(canvas); }
   }
  }
