@@ -169,17 +169,21 @@ public class WaterWallpaperService extends WallpaperService {
     return (lo+hi)*.5f;
   }
   private Path surface(float nx,float ny,float t,float w,float h,boolean filled){
+    return surfaceLayer(nx,ny,t,w,h,filled,0);
+  }
+  private Path surfaceLayer(float nx,float ny,float t,float w,float h,boolean filled,int layer){
     Path p=new Path();float tx=-ny,ty=nx,span=(float)Math.hypot(w,h)*1.5f;
     if(filled){p.moveTo(nx*t-tx*span+nx*span,ny*t-ty*span+ny*span);p.lineTo(nx*t-tx*span,ny*t-ty*span);}
     for(int i=0;i<=160;i++){
       float q=-span+2*span*i/160f;
       float u=q/Math.max(1,w);
-      float ripple=(float)Math.sin(u*10f+phase)*Math.min(w,h)*.0018f;
+      float ripple=(float)Math.sin(u*(5.0f+layer*.7f)+phase*(.72f+layer*.08f)+layer*1.4f)*Math.min(w,h)*(.007f+layer*.0018f);
+      ripple+=(float)Math.sin(u*(10.0f+layer)+phase*1.35f+layer*.9f)*Math.min(w,h)*.0032f;
       ripple+=Math.max(-.25f,Math.min(.25f,slosh))*(float)Math.sin(u*3f)*Math.min(w,h)*.012f;
       for(int k=0;k<waveA.length;k++){
         ripple+=Math.max(-.22f,Math.min(.22f,waveA[k]))*(float)Math.sin(u*(3.1f+k*2.5f)+k*.91f)*Math.min(w,h)*.018f/(1f+k*.3f);
       }
-      ripple=Math.max(-Math.min(w,h)*.015f,Math.min(Math.min(w,h)*.015f,ripple));
+      ripple=Math.max(-Math.min(w,h)*.032f,Math.min(Math.min(w,h)*.032f,ripple));
       float x=nx*(t+ripple)+tx*q,y=ny*(t+ripple)+ty*q;
       if(i==0&&!filled)p.moveTo(x,y);else p.lineTo(x,y);
     }
@@ -206,6 +210,15 @@ public class WaterWallpaperService extends WallpaperService {
     paint.setShader(new RadialGradient(w*.86f,h*.26f,w*.9f,
       new int[]{0xaa00d4b7,0x665e93ba,0x002a3568},null,Shader.TileMode.CLAMP));
     canvas.drawRect(0,0,w,h,paint);paint.setShader(null);
+    // Volumetric illumination: overlapping pools of refracted light.
+    for(int i=0;i<5;i++){
+      float cx=w*(.14f+i*.2f),cy=h*(.35f+(i%3)*.19f);
+      float radius=w*(.65f+(i%2)*.25f);
+      paint.setShader(new RadialGradient(cx,cy,radius,
+        new int[]{i%2==0?0x4478e8d6:0x44f7bd7c,0x1b285f91,0x00040b20},
+        null,Shader.TileMode.CLAMP));
+      canvas.drawRect(0,0,w,h,paint);paint.setShader(null);
+    }
     // Smooth glass caustics instead of straight graphic ribbons.
     for(int i=0;i<7;i++){
       float shift=i*.075f;
@@ -249,10 +262,28 @@ public class WaterWallpaperService extends WallpaperService {
       canvas.drawCircle(x-radius*.29f,y-radius*.34f,Math.max(.6f,radius*.13f),paint);
     }
     canvas.restore();
+    // Three displaced translucent sheets give the surface visible thickness.
+    for(int layer=3;layer>=1;layer--){
+      float offset=layer*w*.009f;
+      Path sheet=surfaceLayer(nx,ny,t+offset,w,h,true,layer);
+      paint.setStyle(Paint.Style.FILL);
+      paint.setShader(new LinearGradient(0,0,w,h,
+        layer==3?new int[]{0x6632c5cb,0x223c69ad,0x0068c6b9}:
+        layer==2?new int[]{0x995ac7c3,0x44347d9d,0x006ac5d4}:
+                 new int[]{0x887ce2d6,0x555c8b9e,0x00ffd49a},
+        null,Shader.TileMode.CLAMP));
+      canvas.drawPath(sheet,paint);paint.setShader(null);
+      Path rim=surfaceLayer(nx,ny,t+offset,w,h,false,layer);
+      paint.setStyle(Paint.Style.STROKE);
+      paint.setStrokeWidth(w*(layer==1?.008f:.004f));
+      paint.setColor(layer==1?0x88ffe2b4:0x5580e8e4);
+      canvas.drawPath(rim,paint);
+    }
+    // Thin refracted highlight follows the true moving waterline.
     Path waterline=surface(nx,ny,t,w,h,false);
-    paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(w*.013f);
+    paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(w*.018f);
     paint.setColor(0x77edb478);canvas.drawPath(waterline,paint);
-    paint.setStrokeWidth(w*.004f);paint.setColor(0xffb8f5e8);
+    paint.setStrokeWidth(w*.0035f);paint.setColor(0xffd8fff2);
     canvas.drawPath(waterline,paint);paint.setStyle(Paint.Style.FILL);
     paint.setStyle(Paint.Style.FILL); paint.setTextAlign(Paint.Align.CENTER);
     paint.setTypeface(android.graphics.Typeface.create("sans-serif-light",0));
