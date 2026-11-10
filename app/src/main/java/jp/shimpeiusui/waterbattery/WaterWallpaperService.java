@@ -210,15 +210,39 @@ public class WaterWallpaperService extends WallpaperService {
     // Background is always present, independent of the liquid fill.
     ensureArtwork();
     canvas.drawColor(0xff041324);
-    if(liquidArtwork!=null){
-      float dx=(float)Math.sin(ambientTime*.095f)*w*.018f;
-      float dy=(float)Math.cos(ambientTime*.071f)*h*.012f;
-      paint.setStyle(Paint.Style.FILL);paint.setShader(null);paint.setAlpha(255);
-      paint.setFilterBitmap(true);
-      canvas.drawBitmap(liquidArtwork,
-        new Rect(0,0,liquidArtwork.getWidth(),liquidArtwork.getHeight()),
-        new RectF(-w*.055f+dx,-h*.055f+dy,w*1.055f+dx,h*1.055f+dy),paint);
+    // Resolution-independent layered glass background: rendered at native
+    // screen resolution rather than scaling the old 400x210 JPEG.
+    float dx=(float)Math.sin(ambientTime*.095f)*w*.018f;
+    float dy=(float)Math.cos(ambientTime*.071f)*h*.012f;
+    canvas.save();canvas.translate(dx,dy);
+    paint.setStyle(Paint.Style.FILL);paint.setAlpha(255);
+    paint.setShader(new LinearGradient(0,0,w,h,
+      new int[]{0xff020914,0xff06243b,0xff073f51,0xff0b2746,0xff020917},
+      new float[]{0f,.26f,.53f,.76f,1f},Shader.TileMode.CLAMP));
+    canvas.drawRect(-w*.1f,-h*.1f,w*1.1f,h*1.1f,paint);paint.setShader(null);
+    for(int i=0;i<8;i++){
+      float cx=w*(.15f+.11f*i),cy=h*(.18f+.11f*(i%5));
+      paint.setShader(new RadialGradient(cx,cy,w*(.36f+.08f*(i%3)),
+        new int[]{i%3==0?0x5541ddc3:i%3==1?0x443568b4:0x44e5a969,0x00203558},
+        null,Shader.TileMode.CLAMP));
+      canvas.drawRect(-w*.1f,-h*.1f,w*1.1f,h*1.1f,paint);paint.setShader(null);
     }
+    // Smooth translucent glass folds and hairline specular highlights.
+    for(int i=0;i<9;i++){
+      float offset=i*.055f;
+      Path fold=new Path();
+      fold.moveTo(-w*.25f,h*(.60f+offset));
+      fold.cubicTo(w*.25f,h*(.33f+offset),w*.45f,h*(.83f-offset),w*.78f,h*(.47f-offset));
+      fold.cubicTo(w*1.04f,h*(.17f+offset),w*.82f,h*(.13f+offset),w*1.23f,h*(.03f+offset));
+      paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(w*(.024f+i*.006f));
+      paint.setShader(new LinearGradient(0,h*.7f,w,h*.2f,
+        new int[]{0x0045d4d1,0x3341d7cb,0x33698dc2,0x00ffd7a2},
+        null,Shader.TileMode.CLAMP));
+      canvas.drawPath(fold,paint);paint.setShader(null);
+      paint.setStrokeWidth(w*.0016f);
+      paint.setColor(i%3==0?0x99f4c48a:0x7781e5de);canvas.drawPath(fold,paint);
+    }
+    paint.setStyle(Paint.Style.FILL);canvas.restore();
     // Slow, subtle ambient light undulates independently from the water.
     float glowX=w*(.55f+.22f*(float)Math.sin(ambientTime*.14f));
     float glowY=h*(.38f+.12f*(float)Math.cos(ambientTime*.11f));
@@ -235,13 +259,10 @@ public class WaterWallpaperService extends WallpaperService {
     // Subtle underwater softening: translucent refractive layers over
     // the same gently moving background, without an expensive full blur.
     float refractionX=(float)Math.sin(ambientTime*.17f)*w*.008f;
-    if(liquidArtwork!=null){
-      paint.setShader(null);paint.setAlpha(42);
-      canvas.drawBitmap(liquidArtwork,
-        new Rect(0,0,liquidArtwork.getWidth(),liquidArtwork.getHeight()),
-        new RectF(-w*.025f+refractionX,-h*.014f,w*1.025f+refractionX,h*1.014f),paint);
-      paint.setAlpha(255);
-    }
+    // Water gets its own soft optical tint; background remains sharp above it.
+    paint.setShader(new RadialGradient(w*.64f,h*.69f,w*.75f,
+      new int[]{0x2241d9cf,0x113e88a9,0x00051930},null,Shader.TileMode.CLAMP));
+    canvas.drawRect(0,0,w,h,paint);paint.setShader(null);
     // Translucent depth tint keeps the photographic texture visible.
     paint.setShader(new LinearGradient(0,0,w,h,
       new int[]{0x44020b19,0x18003d45,0x18006c73,0x4403102b},
